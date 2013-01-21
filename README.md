@@ -7,15 +7,15 @@
 
 ## Usage
 
-	from pycudadistances.distances import euclidean_distances
-	X = [[0, 1], [1, 1]]
+	>>> from pycudadistances.distances import euclidean_distances
+	>>> X = [[0, 1], [1, 1]]
     
-    euclidean_distances(X, X)
+    >>> euclidean_distances(X, X)
     array([[ 0.,  1.],
            [ 1.,  0.]])
     
-    # get distance to origin
-    euclidean_distances(X, [[0, 0]])
+    >>> # get distance to origin
+    >>> euclidean_distances(X, [[0, 0]])
     array([[ 1.        ],
            [ 1.41421356]])
 
@@ -38,12 +38,8 @@
 ## Dependencies
 
 The required dependencies to build the software are Python >= 2.6,
-setuptools, Numpy >= 1.3, SciPy >= 0.7 and a working C/C++ compiler.
-This configuration matches the Ubuntu 10.04 LTS release from April 2010.
+setuptools, Numpy >= 1.3, PyCuda.
 
-To run the tests you will also need nose >= 0.10.
-
- 
 ## Install
 
 This package uses distutils, which is the default way of installing
