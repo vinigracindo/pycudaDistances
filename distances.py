@@ -574,51 +574,57 @@ def hamming(X, Y=None):
     
     return solution
 
-#def canberra(X, Y):
-#    X, Y = check_pairwise_arrays(X,Y)
-#     
-#    rows = X.shape[0]
-#    cols = Y.shape[0]
-#    
-#    solution = numpy.zeros((rows, cols))
-#    solution = solution.astype(numpy.float32)
-#    
-#    kernel_code_template = """
-#        #include <math.h>
-#        
-#        __global__ void canberra(float *x, float *y, float *solution) {
-#
-#            int idx = threadIdx.x + blockDim.x * blockIdx.x;
-#            int idy = threadIdx.y + blockDim.y * blockIdx.y;
-#            
-#            float result = 0.0;
-#            
-#            for(int iter = 0; iter < %(NDIM)s; iter++) {
-#                
-#                float x_e = x[%(NDIM)s * idy + iter];
-#                float y_e = y[%(NDIM)s * idx + iter];
-#                
-#                float denom = (fabs(x_e) + fabs(y_e));
-#                
-#                if (denom != 0) result += fabs(x_e - y_e) / denom;
-#            }
-#            int pos = idx + %(NCOLS)s * idy;
-#            solution[pos] = result;
-#        }
-#    """
-#    
-#    kernel_code = kernel_code_template % {
-#        'NCOLS': cols,
-#        'NDIM': X.shape[1]
-#    }
-#    
-#    mod = SourceModule(kernel_code)
-#    
-#    func = mod.get_function("canberra")
-#    func(drv.In(X), drv.In(Y), drv.Out(solution), block=(cols, rows, 1))
-#    
-#    return solution
-#
+def canberra(X, Y):
+    X, Y = check_pairwise_arrays(X,Y)
+    
+    rows = X.shape[0]
+    cols = Y.shape[0]
+    
+    dx, mx = divmod(cols, BLOCK_SIZE)
+    dy, my = divmod(X.shape[1], BLOCK_SIZE)
+
+    gdim = ( (dx + (mx>0)), (dy + (my>0)) )
+    
+    solution = numpy.zeros((rows, cols))
+    solution = solution.astype(numpy.float32)
+    
+    kernel_code_template = """
+        #include <math.h>
+        
+        __global__ void canberra(float *x, float *y, float *solution) {
+
+            int idx = threadIdx.x + blockDim.x * blockIdx.x;
+            int idy = threadIdx.y + blockDim.y * blockIdx.y;
+            
+            if ( ( idx < %(NCOLS)s ) && ( idy < %(NDIM)s ) ) {
+                float result = 0.0;
+                
+                for(int iter = 0; iter < %(NDIM)s; iter++) {
+                    
+                    float x_e = x[%(NDIM)s * idy + iter];
+                    float y_e = y[%(NDIM)s * idx + iter];
+                    
+                    float denom = (fabs(x_e) + fabs(y_e));
+                    
+                    if (denom != 0) result += fabs(x_e - y_e) / denom;
+                }
+                int pos = idx + %(NCOLS)s * idy;
+                solution[pos] = result;
+            }
+        }
+    """
+    
+    kernel_code = kernel_code_template % {
+        'NCOLS': cols,
+        'NDIM': X.shape[1]
+    }
+    
+    mod = SourceModule(kernel_code)
+    
+    func = mod.get_function("canberra")
+    func(drv.In(X), drv.In(Y), drv.Out(solution), block=(BLOCK_SIZE, BLOCK_SIZE, 1), grid=gdim)
+    
+    return solution
 
 def chebyshev(X, Y):
     raise NotImplementedError
