@@ -243,80 +243,88 @@ def pearson_correlation(X, Y=None):
     
     return solution
 
-#def manhattan_distances(X, Y=None):
-#    """
-#    Considering the rows of X (and Y=X) as vectors, compute the
-#    distance matrix between each pair of vectors.
-#
-#    This distance implementation is the distance between two points in a grid
-#    based on a strictly horizontal and/or vertical path (that is, along the
-#    grid lines as opposed to the diagonal or "as the crow flies" distance.
-#    The Manhattan distance is the simple sum of the horizontal and vertical
-#    components, whereas the diagonal distance might be computed by applying the
-#    Pythagorean theorem.
-#
-#    Parameters
-#    ----------
-#    X : {array-like}, shape = [n_samples_1, n_features]
-#
-#    Y : {array-like}, shape = [n_samples_2, n_features]
-#
-#    Returns
-#    -------
-#    distances : {array}, shape = [n_samples_1, n_samples_2]
-#
-#    Examples
-#    --------
-#    >>> from pycudadistances.distances import manhattan_distances
-#    >>> X = [[2.5, 3.5, 3.0, 3.5, 2.5, 3.0],[2.5, 3.5, 3.0, 3.5, 2.5, 3.0]]
-#    >>> # distance between rows of X
-#    >>> manhattan_distances(X, X)
-#    array([[ 1.,  1.],
-#           [ 1.,  1.]])
-#    >>> manhattan_distances(X, [[3.0, 3.5, 1.5, 5.0, 3.5,3.0]])
-#    array([[ 0.25],
-#          [ 0.25]])
-#    """
-#    X, Y = check_pairwise_arrays(X,Y)
-#    
-#    rows = X.shape[0]
-#    cols = Y.shape[0]
-#    
-#    solution = numpy.zeros((rows, cols))
-#    solution = solution.astype(numpy.float32)
-#    
-#    kernel_code_template = """
-#        #include <math.h>
-#        
-#        __global__ void manhattan(float *x, float *y, float *solution) {
-#
-#            int idx = threadIdx.x + blockDim.x * blockIdx.x;
-#            int idy = threadIdx.y + blockDim.y * blockIdx.y;
-#            
-#            float result = 0.0;
-#            
-#            for(int iter = 0; iter < %(NDIM)s; iter++) {
-#                
-#                float x_e = x[%(NDIM)s * idy + iter];
-#                float y_e = y[%(NDIM)s * idx + iter];
-#                result += fabs((x_e - y_e));
-#            }
-#            int pos = idx + %(NCOLS)s * idy;
-#            solution[pos] = result;
-#        }
-#    """
-#    
-#    kernel_code = kernel_code_template % {
-#        'NCOLS': cols,
-#        'NDIM': X.shape[1]
-#    }
-#    
-#    mod = SourceModule(kernel_code)
-#    
-#    func = mod.get_function("manhattan")
-#    func(drv.In(X), drv.In(Y), drv.Out(solution), block=(cols, rows, 1))
-#    
-#    return 1.0 - (solution / float(X.shape[1]))
+def manhattan_distances(X, Y=None):
+    """
+    Considering the rows of X (and Y=X) as vectors, compute the
+    distance matrix between each pair of vectors.
+
+    This distance implementation is the distance between two points in a grid
+    based on a strictly horizontal and/or vertical path (that is, along the
+    grid lines as opposed to the diagonal or "as the crow flies" distance.
+    The Manhattan distance is the simple sum of the horizontal and vertical
+    components, whereas the diagonal distance might be computed by applying the
+    Pythagorean theorem.
+
+    Parameters
+    ----------
+    X : {array-like}, shape = [n_samples_1, n_features]
+
+    Y : {array-like}, shape = [n_samples_2, n_features]
+
+    Returns
+    -------
+    distances : {array}, shape = [n_samples_1, n_samples_2]
+
+    Examples
+    --------
+    >>> from pycudadistances.distances import manhattan_distances
+    >>> X = [[2.5, 3.5, 3.0, 3.5, 2.5, 3.0],[2.5, 3.5, 3.0, 3.5, 2.5, 3.0]]
+    >>> # distance between rows of X
+    >>> manhattan_distances(X, X)
+    array([[ 1.,  1.],
+           [ 1.,  1.]])
+    >>> manhattan_distances(X, [[3.0, 3.5, 1.5, 5.0, 3.5,3.0]])
+    array([[ 0.25],
+          [ 0.25]])
+    """
+    X, Y = check_pairwise_arrays(X,Y)
+    
+    rows = X.shape[0]
+    cols = Y.shape[0]
+    
+    dx, mx = divmod(cols, BLOCK_SIZE)
+    dy, my = divmod(X.shape[1], BLOCK_SIZE)
+
+    gdim = ( (dx + (mx>0)), (dy + (my>0)) )
+    
+    solution = numpy.zeros((rows, cols))
+    solution = solution.astype(numpy.float32)
+    
+    kernel_code_template = """
+        #include <math.h>
+        
+        __global__ void manhattan(float *x, float *y, float *solution) {
+
+            int idx = threadIdx.x + blockDim.x * blockIdx.x;
+            int idy = threadIdx.y + blockDim.y * blockIdx.y;
+            
+            if ( ( idx < %(NCOLS)s ) && ( idy < %(NDIM)s ) ) {
+                float result = 0.0;
+                
+                for(int iter = 0; iter < %(NDIM)s; iter++) {
+                    
+                    float x_e = x[%(NDIM)s * idy + iter];
+                    float y_e = y[%(NDIM)s * idx + iter];
+                    result += fabs((x_e - y_e));
+                }
+                int pos = idx + %(NCOLS)s * idy;
+                solution[pos] = result;
+            }
+        }
+    """
+    
+    kernel_code = kernel_code_template % {
+        'NCOLS': cols,
+        'NDIM': X.shape[1]
+    }
+    
+    mod = SourceModule(kernel_code)
+    
+    func = mod.get_function("manhattan")
+    func(drv.In(X), drv.In(Y), drv.Out(solution), block=(BLOCK_SIZE, BLOCK_SIZE, 1), grid=gdim)
+    
+    return 1.0 - (solution / float(X.shape[1]))
+
 #
 #def minkowski(X, Y=None, P=1):
 #    """
