@@ -325,88 +325,94 @@ def manhattan_distances(X, Y=None):
     
     return 1.0 - (solution / float(X.shape[1]))
 
-#
-#def minkowski(X, Y=None, P=1):
-#    """
-#    This is the generalized metric distance. When P=1 it becomes city 
-#    block distance and when P=2, it becomes Euclidean distance.
-#    
-#    Computes the Minkowski distance between two vectors ``u`` and ``v``,
-#    defined as
-#
-#    .. math::
-#
-#       {||u-v||}_p = (\sum{|u_i - v_i|^p})^{1/p}.
-#
-#    Parameters
-#    ----------
-#    X : {array-like}, shape = [n_samples_1, n_features]
-#
-#    Y : {array-like}, shape = [n_samples_2, n_features]
-#    
-#    p : int
-#        The order of the norm of the difference :math:`{||u-v||}_p`.
-#
-#    Returns
-#    -------
-#    distances : {array}, shape = [n_samples_1, n_samples_2]
-#    
-#    Examples
-#    >>> from pycudadistances.distances import minkowski
-#    >>> X = [[2.5, 3.5, 3.0, 3.5, 2.5, 3.0],[2.5, 3.5, 3.0, 3.5, 2.5, 3.0]]
-#    >>> # distance between rows of X
-#    >>> minkowski(X, X, P=1)
-#    array([[ 0.,  0.],
-#           [ 0.,  0.]])
-#    >>> minkowski(X, [[3.0, 3.5, 1.5, 5.0, 3.5,3.0]], P=3)
-#    array([[ 1.98952866],
-#          [ 1.98952866]])
-#    --------
-#    
-#    """
-#    X, Y = check_pairwise_arrays(X,Y)
-#    
-#    rows = X.shape[0]
-#    cols = Y.shape[0]
-#    
-#    solution = numpy.zeros((rows, cols))
-#    solution = solution.astype(numpy.float32)
-#    
-#    kernel_code_template = """
-#        #include <math.h>
-#        #include <stdio.h>
-#        
-#        __global__ void minkowski(float *x, float *y, float *solution) {
-#
-#            int idx = threadIdx.x + blockDim.x * blockIdx.x;
-#            int idy = threadIdx.y + blockDim.y * blockIdx.y;
-#            
-#            float result = 0.0;
-#            
-#            for(int iter = 0; iter < %(NDIM)s; iter++) {
-#                
-#                float x_e = x[%(NDIM)s * idy + iter];
-#                float y_e = y[%(NDIM)s * idx + iter];
-#                result += pow(fabs(x_e - y_e), %(ORDER)s);
-#            }
-#            int pos = idx + %(NCOLS)s * idy;
-#            solution[pos] = pow(result, 1/float(%(ORDER)s));
-#        }
-#    """
-#    
-#    kernel_code = kernel_code_template % {
-#        'NCOLS': cols,
-#        'NDIM': X.shape[1],
-#        'ORDER': P
-#    }
-#    
-#    mod = SourceModule(kernel_code)
-#    
-#    func = mod.get_function("minkowski")
-#    func(drv.In(X), drv.In(Y), drv.Out(solution), block=(cols, rows, 1))
-#    
-#    return solution
-#
+def minkowski(X, Y=None, P=1):
+    """
+    This is the generalized metric distance. When P=1 it becomes city 
+    block distance and when P=2, it becomes Euclidean distance.
+    
+    Computes the Minkowski distance between two vectors ``u`` and ``v``,
+    defined as
+
+    .. math::
+
+       {||u-v||}_p = (\sum{|u_i - v_i|^p})^{1/p}.
+
+    Parameters
+    ----------
+    X : {array-like}, shape = [n_samples_1, n_features]
+
+    Y : {array-like}, shape = [n_samples_2, n_features]
+    
+    p : int
+        The order of the norm of the difference :math:`{||u-v||}_p`.
+
+    Returns
+    -------
+    distances : {array}, shape = [n_samples_1, n_samples_2]
+    
+    Examples
+   >>> from pycudadistances.distances import minkowski
+    >>> X = [[2.5, 3.5, 3.0, 3.5, 2.5, 3.0],[2.5, 3.5, 3.0, 3.5, 2.5, 3.0]]
+    >>> # distance between rows of X
+    >>> minkowski(X, X, P=1)
+   array([[ 0.,  0.],
+         [ 0.,  0.]])
+   >>> minkowski(X, [[3.0, 3.5, 1.5, 5.0, 3.5,3.0]], P=3)
+    array([[ 1.98952866],
+          [ 1.98952866]])
+    --------
+    
+    """
+    X, Y = check_pairwise_arrays(X,Y)
+    
+    rows = X.shape[0]
+    cols = Y.shape[0]
+    
+    dx, mx = divmod(cols, BLOCK_SIZE)
+    dy, my = divmod(X.shape[1], BLOCK_SIZE)
+
+    gdim = ( (dx + (mx>0)), (dy + (my>0)) )
+    
+    solution = numpy.zeros((rows, cols))
+    solution = solution.astype(numpy.float32)
+    
+    kernel_code_template = """
+        #include <math.h>
+        #include <stdio.h>
+        
+        __global__ void minkowski(float *x, float *y, float *solution) {
+
+            int idx = threadIdx.x + blockDim.x * blockIdx.x;
+            int idy = threadIdx.y + blockDim.y * blockIdx.y;
+            
+            if ( ( idx < %(NCOLS)s ) && ( idy < %(NDIM)s ) ) {
+                float result = 0.0;
+                
+                for(int iter = 0; iter < %(NDIM)s; iter++) {
+                    
+                    float x_e = x[%(NDIM)s * idy + iter];
+                    float y_e = y[%(NDIM)s * idx + iter];
+                    result += pow(fabs(x_e - y_e), %(ORDER)s);
+                }
+                int pos = idx + %(NCOLS)s * idy;
+                solution[pos] = pow(result, 1/float(%(ORDER)s));
+            }
+        }
+    """
+    
+    kernel_code = kernel_code_template % {
+        'NCOLS': cols,
+        'NDIM': X.shape[1],
+        'ORDER': P
+    }
+    
+    mod = SourceModule(kernel_code)
+    
+    func = mod.get_function("minkowski")
+    func(drv.In(X), drv.In(Y), drv.Out(solution), block=(BLOCK_SIZE, BLOCK_SIZE, 1), grid=gdim)
+    
+    return solution
+
 #def cosine_distances(X, Y=None):
 #    """
 #    Considering the rows of X (and Y=X) as vectors, compute the
