@@ -103,15 +103,15 @@ def euclidean_distances(X, Y=None, inverse=True):
     """
     X, Y = check_pairwise_arrays(X,Y)
     
-    rows = X.shape[0]
-    cols = Y.shape[0]
+    solution_rows = X.shape[0]
+    solution_cols = Y.shape[0]
     
-    dx, mx = divmod(cols, BLOCK_SIZE)
+    dx, mx = divmod(solution_cols, BLOCK_SIZE)
     dy, my = divmod(X.shape[1], BLOCK_SIZE)
-    #gdim = ( (dx + (mx>0)) * BLOCK_SIZE, (dy + (my>0)) * BLOCK_SIZE )
+
     gdim = ( (dx + (mx>0)), (dy + (my>0)) )
     
-    solution = numpy.zeros((rows, cols))
+    solution = numpy.zeros((solution_rows, solution_cols))
     solution = solution.astype(numpy.float32)
 
     kernel_code_template = """
@@ -122,19 +122,111 @@ def euclidean_distances(X, Y=None, inverse=True):
             int idx = threadIdx.x + blockDim.x * blockIdx.x;
             int idy = threadIdx.y + blockDim.y * blockIdx.y;
             
-            if ( ( idx < %(NCOLS)s ) && ( idy < %(NCOLS)s ) ) {
+            if ( ( idx < %(NCOLS)s ) && ( idy < %(NROWS)s ) ) {
             
                 float result = 0.0;
                 
                 for(int iter = 0; iter < %(NDIM)s; iter++) {
-                    
-                    float x_e = x[%(NDIM)s * idy + iter];
-                    float y_e = y[%(NDIM)s * idx + iter];
+                    float x_e = x[%(NDIM)s * idx + iter];
+                    float y_e = y[%(NDIM)s * idy + iter];
                     result += pow((x_e - y_e), 2);
                 }
-                int pos = idx + %(NCOLS)s * idy;
+                
+                int pos = idy + %(NROWS)s * idx;
+                 
                 solution[pos] = sqrt(result);
                 
+            }
+        }
+    """
+    
+    kernel_code = kernel_code_template % {
+        'NCOLS': solution_rows,
+        'NROWS': solution_cols,
+        'NDIM': X.shape[1]
+    }
+
+    mod = SourceModule(kernel_code)
+    func = mod.get_function("euclidean")
+    func(drv.In(X), drv.In(Y), drv.Out(solution), block=(BLOCK_SIZE, BLOCK_SIZE, 1), grid=gdim)
+    
+    return numpy.divide(1.0, (1.0 + solution)) if inverse else solution
+
+def pearson_correlation(X, Y=None):
+    """
+    Considering the rows of X (and Y=X) as vectors, compute the
+    distance matrix between each pair of vectors.
+
+    This correlation implementation is equivalent to the cosine similarity
+    since the data it receives is assumed to be centered -- mean is 0. The
+    correlation may be interpreted as the cosine of the angle between the two
+    vectors defined by the users' preference values.
+
+    Parameters
+    ----------
+    X : {array-like}, shape = [n_samples_1, n_features]
+
+    Y : {array-like}, shape = [n_samples_2, n_features]
+
+    Returns
+    -------
+    distances : {array}, shape = [n_samples_1, n_samples_2]
+
+    Examples
+    --------
+    >>> from pycudadistances.distances import pearson_correlation
+    >>> X = [[2.5, 3.5, 3.0, 3.5, 2.5, 3.0],[2.5, 3.5, 3.0, 3.5, 2.5, 3.0]]
+    >>> # distance between rows of X
+    >>> pearson_correlation(X, X)
+    array([[ 1., 1.],
+           [ 1., 1.]])
+    >>> pearson_correlation(X, [[3.0, 3.5, 1.5, 5.0, 3.5,3.0]])
+    array([[ 0.39605904],
+               [ 0.39605904]])
+    """
+    X, Y = check_pairwise_arrays(X,Y)
+    
+    rows = X.shape[0]
+    cols = Y.shape[0]
+    
+    dx, mx = divmod(cols, BLOCK_SIZE)
+    dy, my = divmod(X.shape[1], BLOCK_SIZE)
+
+    gdim = ( (dx + (mx>0)), (dy + (my>0)) )
+    
+    solution = numpy.zeros((rows, cols))
+    solution = solution.astype(numpy.float32)
+    
+    kernel_code_template = """
+        #include <math.h>
+        
+        __global__ void pearson(float *x, float *y, float *solution) {
+        
+            int idx = threadIdx.x + blockDim.x * blockIdx.x;
+            int idy = threadIdx.y + blockDim.y * blockIdx.y;
+            
+            if ( ( idx < %(NCOLS)s ) && ( idy < %(NDIM)s ) ) {
+                float sum_xy, sum_x, sum_y, sum_square_x, sum_square_y;
+                
+                sum_x = sum_y = sum_xy = sum_square_x = sum_square_y = 0.0f;
+                
+                for(int iter = 0; iter < %(NDIM)s; iter ++) {
+                    float x_e = x[%(NDIM)s * idy + iter];
+                    float y_e = y[%(NDIM)s * idx + iter];
+                    sum_x += x_e;
+                    sum_y += y_e;
+                    sum_xy += x_e * y_e;
+                    sum_square_x += pow(x_e, 2);
+                    sum_square_y += pow(y_e, 2);
+                }
+                int pos = idx + %(NCOLS)s * idy;
+                float denom = sqrt(sum_square_x - (pow(sum_x, 2) / %(NDIM)s)) * sqrt(sum_square_y - (pow(sum_y, 2) / %(NDIM)s));
+                if (denom == 0) {
+                    solution[pos] = 0;
+                } else {
+                    float quot = sum_xy - ((sum_x * sum_y) / %(NDIM)s);
+                    solution[pos] = quot / denom;
+                }
             }
         }
     """
@@ -146,88 +238,11 @@ def euclidean_distances(X, Y=None, inverse=True):
     
     mod = SourceModule(kernel_code)
     
-    func = mod.get_function("euclidean")
+    func = mod.get_function("pearson")
     func(drv.In(X), drv.In(Y), drv.Out(solution), block=(BLOCK_SIZE, BLOCK_SIZE, 1), grid=gdim)
     
-    return numpy.divide(1.0, (1.0 + solution)) if inverse else solution
+    return solution
 
-#def pearson_correlation(X, Y=None):
-#    """
-#    Considering the rows of X (and Y=X) as vectors, compute the
-#    distance matrix between each pair of vectors.
-#
-#    This correlation implementation is equivalent to the cosine similarity
-#    since the data it receives is assumed to be centered -- mean is 0. The
-#    correlation may be interpreted as the cosine of the angle between the two
-#    vectors defined by the users' preference values.
-#
-#    Parameters
-#    ----------
-#    X : {array-like}, shape = [n_samples_1, n_features]
-#
-#    Y : {array-like}, shape = [n_samples_2, n_features]
-#
-#    Returns
-#    -------
-#    distances : {array}, shape = [n_samples_1, n_samples_2]
-#
-#    Examples
-#    --------
-#    >>> from pycudadistances.distances import pearson_correlation
-#    >>> X = [[2.5, 3.5, 3.0, 3.5, 2.5, 3.0],[2.5, 3.5, 3.0, 3.5, 2.5, 3.0]]
-#    >>> # distance between rows of X
-#    >>> pearson_correlation(X, X)
-#    array([[ 1., 1.],
-#           [ 1., 1.]])
-#    >>> pearson_correlation(X, [[3.0, 3.5, 1.5, 5.0, 3.5,3.0]])
-#    array([[ 0.39605902],
-#               [ 0.39605902]])
-#    """
-#    X, Y = check_pairwise_arrays(X,Y)
-#    
-#    rows = X.shape[0]
-#    cols = Y.shape[0]
-#    
-#    solution = numpy.zeros((rows, cols))
-#    solution = solution.astype(numpy.float32)
-#    
-#    mod = SourceModule("""
-#        #include <stdio.h>
-#        #include <math.h>
-#        
-#        __global__ void pearson(float *x, float *y, int ndim, int cols, float *solution) {
-#            int idx = threadIdx.x + blockDim.x * blockIdx.x;
-#            int idy = threadIdx.y + blockDim.y * blockIdx.y;
-#            
-#            float sum_xy, sum_x, sum_y, sum_square_x, sum_square_y;
-#            
-#            sum_x = sum_y = sum_xy = sum_square_x = sum_square_y = 0.0f;
-#            
-#            for(int iter = 0; iter < ndim; iter ++) {
-#                float x_e = x[idy * ndim + iter];
-#                float y_e = y[idx * ndim + iter];
-#                sum_x += x_e;
-#                sum_y += y_e;
-#                sum_xy += x_e * y_e;
-#                sum_square_x += pow(x_e, 2);
-#                sum_square_y += pow(y_e, 2);
-#            }
-#            int pos = idx + cols * idy;
-#            float denom = sqrt(sum_square_x - (pow(sum_x, 2) / ndim)) * sqrt(sum_square_y - (pow(sum_y, 2) / ndim));
-#            if (denom == 0) {
-#                solution[pos] = 0;
-#            } else {
-#                float quot = sum_xy - ((sum_x * sum_y) / ndim);
-#                solution[pos] = quot / denom;
-#            }
-#        }
-#    """)
-#
-#    func = mod.get_function("pearson")
-#    func(drv.In(X), drv.In(Y), numpy.int32(X.shape[1]), numpy.int32(cols), drv.Out(solution), block=(cols, rows, 1))
-#    
-#    return solution
-#
 #def manhattan_distances(X, Y=None):
 #    """
 #    Considering the rows of X (and Y=X) as vectors, compute the
@@ -576,23 +591,24 @@ def euclidean_distances(X, Y=None, inverse=True):
 #    
 #    return solution
 #
-#def chebyshev(X, Y):
-#    raise NotImplementedError
-#
-#def jaccard_coefficient(X, Y):
-#    raise NotImplementedError
-#
-#def mahalanobis(X, Y):
-#    raise NotImplementedError
-#
-#def braycurtis(X, Y):
-#    raise NotImplementedError
-#
-#def sorensen_coefficient(X, Y):
-#    raise NotImplementedError
-#
-#def spearman_coefficient(X, Y):
-#    raise NotImplementedError
-#
-#def loglikehood_coefficient(X, Y):
-#    raise NotImplementedError    
+
+def chebyshev(X, Y):
+    raise NotImplementedError
+
+def jaccard_coefficient(X, Y):
+    raise NotImplementedError
+
+def mahalanobis(X, Y):
+    raise NotImplementedError
+
+def braycurtis(X, Y):
+    raise NotImplementedError
+
+def sorensen_coefficient(X, Y):
+    raise NotImplementedError
+
+def spearman_coefficient(X, Y):
+    raise NotImplementedError
+
+def loglikehood_coefficient(X, Y):
+    raise NotImplementedError    
