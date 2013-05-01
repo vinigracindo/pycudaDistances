@@ -413,86 +413,93 @@ def minkowski(X, Y=None, P=1):
     
     return solution
 
-#def cosine_distances(X, Y=None):
-#    """
-#    Considering the rows of X (and Y=X) as vectors, compute the
-#    distance matrix between each pair of vectors.
-#
-#     An implementation of the cosine similarity. The result is the cosine of
-#     the angle formed between the two preference vectors.
-#     Note that this similarity does not "center" its data, shifts the user's
-#     preference values so that each of their means is 0. For this behavior,
-#     use Pearson Coefficient, which actually is mathematically
-#     equivalent for centered data.
-#
-#    Parameters
-#    ----------
-#    X: array of shape (n_samples_1, n_features)
-#
-#    Y: array of shape (n_samples_2, n_features)
-#
-#    Returns
-#    -------
-#    distances: array of shape (n_samples_1, n_samples_2)
-#
-#    Examples
-#    --------
-#    >>> from pycudadistances.distances import cosine_distances
-#    >>> X = [[2.5, 3.5, 3.0, 3.5, 2.5, 3.0],[2.5, 3.5, 3.0, 3.5, 2.5, 3.0]]
-#    >>> # distance between rows of X
-#    >>> cosine_distances(X, X)
-#    array([[ 1.,  1.],
-#          [ 1.,  1.]])
-#    >>> cosine_distances(X, [[3.0, 3.5, 1.5, 5.0, 3.5,3.0]])
-#    array([[ 0.9606463],
-#           [ 0.9606463]])
-#
-#    """
-#    X, Y = check_pairwise_arrays(X,Y)
-#    
-#    rows = X.shape[0]
-#    cols = Y.shape[0]
-#    
-#    solution = numpy.zeros((rows, cols))
-#    solution = solution.astype(numpy.float32)
-#    
-#    kernel_code_template = """
-#        #include <math.h>
-#        
-#        __global__ void cosine(float *x, float *y, float *solution) {
-#
-#            int idx = threadIdx.x + blockDim.x * blockIdx.x;
-#            int idy = threadIdx.y + blockDim.y * blockIdx.y;
-#            
-#            float sum_ab = 0.0;
-#            float mag_a = 0.0;
-#            float mag_b = 0.0;
-#            
-#            for(int iter = 0; iter < %(NDIM)s; iter++) {
-#                
-#                float x_e = x[%(NDIM)s * idy + iter];
-#                float y_e = y[%(NDIM)s * idx + iter];
-#                sum_ab += x_e * y_e;
-#                mag_a += pow(x_e, 2);
-#                mag_b += pow(y_e, 2);
-#            }
-#            int pos = idx + %(NCOLS)s * idy;
-#            solution[pos] = sum_ab / (sqrt(mag_a) * sqrt(mag_b));
-#        }
-#    """
-#    
-#    kernel_code = kernel_code_template % {
-#        'NCOLS': cols,
-#        'NDIM': X.shape[1]
-#    }
-#    
-#    mod = SourceModule(kernel_code)
-#    
-#    func = mod.get_function("cosine")
-#    func(drv.In(X), drv.In(Y), drv.Out(solution), block=(cols, rows, 1))
-#    
-#    return solution
-#
+def cosine_distances(X, Y=None):
+    """
+    Considering the rows of X (and Y=X) as vectors, compute the
+    distance matrix between each pair of vectors.
+
+     An implementation of the cosine similarity. The result is the cosine of
+     the angle formed between the two preference vectors.
+     Note that this similarity does not "center" its data, shifts the user's
+     preference values so that each of their means is 0. For this behavior,
+     use Pearson Coefficient, which actually is mathematically
+     equivalent for centered data.
+
+    Parameters
+    ----------
+    X: array of shape (n_samples_1, n_features)
+
+    Y: array of shape (n_samples_2, n_features)
+
+    Returns
+    -------
+    distances: array of shape (n_samples_1, n_samples_2)
+
+    Examples
+    --------
+    >>> from pycudadistances.distances import cosine_distances
+    >>> X = [[2.5, 3.5, 3.0, 3.5, 2.5, 3.0],[2.5, 3.5, 3.0, 3.5, 2.5, 3.0]]
+    >>> # distance between rows of X
+    >>> cosine_distances(X, X)
+    array([[ 1.,  1.],
+          [ 1.,  1.]])
+    >>> cosine_distances(X, [[3.0, 3.5, 1.5, 5.0, 3.5,3.0]])
+    array([[ 0.9606463],
+           [ 0.9606463]])
+
+    """
+    X, Y = check_pairwise_arrays(X,Y)
+    
+    rows = X.shape[0]
+    cols = Y.shape[0]
+    
+    dx, mx = divmod(cols, BLOCK_SIZE)
+    dy, my = divmod(X.shape[1], BLOCK_SIZE)
+
+    gdim = ( (dx + (mx>0)), (dy + (my>0)) )
+    
+    solution = numpy.zeros((rows, cols))
+    solution = solution.astype(numpy.float32)
+    
+    kernel_code_template = """
+        #include <math.h>
+        
+        __global__ void cosine(float *x, float *y, float *solution) {
+
+            int idx = threadIdx.x + blockDim.x * blockIdx.x;
+            int idy = threadIdx.y + blockDim.y * blockIdx.y;
+            
+            if ( ( idx < %(NCOLS)s ) && ( idy < %(NDIM)s ) ) {
+                float sum_ab = 0.0;
+                float mag_a = 0.0;
+                float mag_b = 0.0;
+                
+                for(int iter = 0; iter < %(NDIM)s; iter++) {
+                    
+                    float x_e = x[%(NDIM)s * idy + iter];
+                    float y_e = y[%(NDIM)s * idx + iter];
+                    sum_ab += x_e * y_e;
+                    mag_a += pow(x_e, 2);
+                    mag_b += pow(y_e, 2);
+                }
+                int pos = idx + %(NCOLS)s * idy;
+                solution[pos] = sum_ab / (sqrt(mag_a) * sqrt(mag_b));
+            }
+        }
+    """
+    
+    kernel_code = kernel_code_template % {
+        'NCOLS': cols,
+        'NDIM': X.shape[1]
+    }
+    
+    mod = SourceModule(kernel_code)
+    
+    func = mod.get_function("cosine")
+    func(drv.In(X), drv.In(Y), drv.Out(solution), block=(BLOCK_SIZE, BLOCK_SIZE, 1), grid=gdim)
+    
+    return solution
+
 #def hamming(X, Y=None):
 #    """
 #    Computes the Hamming distance between two n-vectors ``u`` and
